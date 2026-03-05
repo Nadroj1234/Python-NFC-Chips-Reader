@@ -193,8 +193,8 @@ class PortalState:
           4) UID fallback
         """
         obj = self.first_json()
-        if isinstance(obj, dict) and isinstance(obj.get("duck_name"), str) and obj["duck_name"].strip():
-            return obj["duck_name"].strip()
+        if isinstance(obj, dict) and isinstance(obj.get("name"), str) and obj["name"].strip():
+            return obj["name"].strip()
 
         txt = self.first_text()
         if txt:
