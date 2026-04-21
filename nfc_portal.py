@@ -33,6 +33,14 @@ from typing import Callable, Optional, Tuple, Dict, Any, List
 from smartcard.System import readers
 from smartcard.Exceptions import CardConnectionException, NoCardException
 
+from skylanders import (
+    BLOCK_SIZE,
+    SKYLANDERS_BLOCK_COUNT,
+    SkylanderInfo,
+    calc_sector_key_a,
+    parse_skylander_info,
+)
+
 
 # -----------------------------
 # PC/SC constants
@@ -143,6 +151,7 @@ class PortalState:
     reader_name: str
     uid_hex: Optional[str]                  # None when no tag present
     ndef_records: Tuple[NdefRecord, ...]    # empty when none/unknown
+    skylander_info: Optional[SkylanderInfo] = None
 
     def has_tag(self) -> bool:
         return self.uid_hex is not None
@@ -186,12 +195,16 @@ class PortalState:
 
     def get_name(self) -> str:
         """
-        Best-effort duck name:
+        Best-effort name:
+          0) Skylander figure name
           1) JSON field "name" if present
           2) TEXT record value
           3) URL last path segment (optional)
           4) UID fallback
         """
+        if self.skylander_info is not None:
+            return self.skylander_info.name
+
         obj = self.first_json()
         if isinstance(obj, dict) and isinstance(obj.get("name"), str) and obj["name"].strip():
             return obj["name"].strip()
@@ -207,7 +220,10 @@ class PortalState:
             if parts:
                 return parts[-1]
 
-        return self.uid_hex or "Unknown Duck"
+        return self.uid_hex or "Unknown Tag"
+
+    def is_skylander(self) -> bool:
+        return self.skylander_info is not None
 
 
 # -----------------------------
@@ -453,6 +469,57 @@ def _read_uid_hex(card_connection) -> Optional[str]:
     return "".join(f"{b:02X}" for b in uid_bytes)
 
 
+def _load_key(card_connection, key_slot: int, key_bytes: bytes) -> bool:
+    apdu = [0xFF, 0x82, 0x00, key_slot & 0xFF, 0x06] + list(key_bytes)
+    _, sw1, sw2 = card_connection.transmit(apdu)
+    return (sw1, sw2) == (STATUS_SUCCESS_SW1, STATUS_SUCCESS_SW2)
+
+
+def _authenticate_block(card_connection, block_number: int, key_slot: int) -> bool:
+    apdu = [0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, block_number & 0xFF, 0x60, key_slot & 0xFF]
+    _, sw1, sw2 = card_connection.transmit(apdu)
+    return (sw1, sw2) == (STATUS_SUCCESS_SW1, STATUS_SUCCESS_SW2)
+
+
+def _read_binary_block(card_connection, block_number: int) -> Optional[bytes]:
+    block_bytes, sw1, sw2 = card_connection.transmit([0xFF, 0xB0, 0x00, block_number & 0xFF, BLOCK_SIZE])
+    if (sw1, sw2) != (STATUS_SUCCESS_SW1, STATUS_SUCCESS_SW2) or len(block_bytes) != BLOCK_SIZE:
+        return None
+    return bytes(block_bytes)
+
+
+def _read_skylander_dump(card_connection, uid_hex: str) -> Optional[bytes]:
+    if len(uid_hex) != 8:
+        return None
+
+    dump = bytearray()
+    key_slot = 0x00
+
+    for sector in range(16):
+        try:
+            key_bytes = calc_sector_key_a(uid_hex, sector)
+        except ValueError:
+            return None
+
+        if not _load_key(card_connection, key_slot, key_bytes):
+            return None
+
+        first_block = sector * 4
+        for block_number in range(first_block, first_block + 4):
+            if not _authenticate_block(card_connection, block_number, key_slot):
+                return None
+
+            block_bytes = _read_binary_block(card_connection, block_number)
+            if block_bytes is None:
+                return None
+            dump.extend(block_bytes)
+
+    if len(dump) != SKYLANDERS_BLOCK_COUNT * BLOCK_SIZE:
+        return None
+
+    return bytes(dump)
+
+
 def _read_portal_state_for_reader(reader_obj, memory_page_end_inclusive: int) -> PortalState:
     """
     Reads a stable snapshot: UID + NDEF records.
@@ -465,24 +532,28 @@ def _read_portal_state_for_reader(reader_obj, memory_page_end_inclusive: int) ->
 
         uid_hex = _read_uid_hex(connection)
         if uid_hex is None:
-            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple())
+            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None)
 
         type2_dump = _read_type2_memory_pages(
             connection, 0x00, memory_page_end_inclusive)
         if type2_dump is None:
-            return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=tuple())
+            skylander_dump = _read_skylander_dump(connection, uid_hex)
+            skylander_info = parse_skylander_info(uid_hex, skylander_dump) if skylander_dump else None
+            return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=tuple(), skylander_info=skylander_info)
 
         ndef_message = _extract_ndef_from_type2_tlvs(type2_dump)
         if ndef_message is None:
-            return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=tuple())
+            skylander_dump = _read_skylander_dump(connection, uid_hex)
+            skylander_info = parse_skylander_info(uid_hex, skylander_dump) if skylander_dump else None
+            return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=tuple(), skylander_info=skylander_info)
 
         records = _parse_ndef_message(ndef_message)
-        return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=records)
+        return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=records, skylander_info=None)
 
     except (CardConnectionException, NoCardException) as e:
         if _is_transient_card_error(e):
-            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple())
-        return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple())
+            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None)
+        return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None)
 
 
 def _fingerprint_state(state: PortalState) -> str:
@@ -491,6 +562,10 @@ def _fingerprint_state(state: PortalState) -> str:
     """
     h = hashlib.sha256()
     h.update((state.uid_hex or "").encode("utf-8"))
+    if state.skylander_info is not None:
+        h.update(str(state.skylander_info.character_id).encode("utf-8"))
+        h.update(str(state.skylander_info.variant_id).encode("utf-8"))
+        h.update(state.skylander_info.raw_dump)
     for r in state.ndef_records:
         h.update(r.kind.encode("utf-8"))
         h.update((r.mime_type or "").encode("utf-8"))

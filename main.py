@@ -1,5 +1,5 @@
-import time
 import json
+import time
 from typing import Optional
 
 from nfc_portal import NfcPortalManager, PortalState
@@ -24,6 +24,16 @@ def print_full_state_dump(state: PortalState):
     print(f"Has Tag: {state.has_tag()}")
     print("-" * 60)
 
+    if state.skylander_info:
+        print("Detected Toy Type: Skylander")
+        print(f"Skylander: {state.skylander_info.name}")
+        print(f"Character ID: {state.skylander_info.character_id}")
+        print(f"Variant ID: {state.skylander_info.variant_id}")
+        print(f"Decode Strategy: {state.skylander_info.decode_strategy}")
+        print(f"Block 1: {state.skylander_info.block_hex(1)}")
+        print("=" * 60)
+        return
+
     if not state.ndef_records:
         print("No NDEF records found.")
         print("=" * 60)
@@ -37,24 +47,22 @@ def print_full_state_dump(state: PortalState):
         print(f"  External Type: {record.external_type}")
         print(f"  Text Value: {record.text_value}")
 
-        # Raw payload preview
         hex_preview = " ".join(f"{b:02X}" for b in record.payload_bytes[:64])
         if len(record.payload_bytes) > 64:
             hex_preview += " ..."
         print(f"  Raw Bytes (hex): {hex_preview}")
 
-        # Try JSON parse
         try:
             parsed_json = record.as_json()
             print("  Parsed JSON:", json.dumps(parsed_json, indent=4))
         except Exception:
             pass
 
-    print("\nResolved Duck Name:", state.get_name())
+    print("\nResolved Name:", state.get_name())
     print("=" * 60)
 
 
-class DuckInteractionController:
+class ToyInteractionController:
     def __init__(self):
         self.left: Optional[PortalState] = None
         self.right: Optional[PortalState] = None
@@ -65,7 +73,6 @@ class DuckInteractionController:
         if side is None:
             return
 
-        # Log EVERYTHING
         if new_state.has_tag():
             print_full_state_dump(new_state)
         else:
@@ -76,9 +83,9 @@ class DuckInteractionController:
         else:
             self.right = new_state if new_state.has_tag() else None
 
-        self._try_greet()
+        self._try_note_pair()
 
-    def _try_greet(self):
+    def _try_note_pair(self):
         if not self.left or not self.right:
             self.last_pair_key = None
             return
@@ -89,24 +96,24 @@ class DuckInteractionController:
 
         self.last_pair_key = pair_key
 
-        duck1_name = self.left.get_name()
-        duck2_name = self.right.get_name()
-
-        print(f"\n🦆 {duck1_name} says hello to {duck2_name} 👋")
+        toy1_name = self.left.get_name()
+        toy2_name = self.right.get_name()
+        print(f"\n{toy1_name} is next to {toy2_name}")
 
 
 def print_reader_names_once():
     from smartcard.System import readers
+
     print("Detected readers:")
-    for r in readers():
-        print(" -", r)
+    for reader in readers():
+        print(" -", reader)
     print()
 
 
 def main():
     print_reader_names_once()
 
-    controller = DuckInteractionController()
+    controller = ToyInteractionController()
 
     manager = NfcPortalManager(
         poll_interval_seconds=0.20,
@@ -117,7 +124,7 @@ def main():
     manager.start()
 
     try:
-        print("Ready. Put ducks on the portals...\n(CTRL+C to quit)")
+        print("Ready. Put a Skylanders toy on the reader...\n(CTRL+C to quit)")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
