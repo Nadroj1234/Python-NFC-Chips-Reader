@@ -17,6 +17,29 @@ def classify_portal_side(reader_name: str) -> Optional[str]:
     return None
 
 
+# 🔥 NEW: Dump all raw blocks
+def dump_all_blocks(state: PortalState):
+    print("\n--- RAW MIFARE CLASSIC DUMP (Blocks 0–63) ---")
+
+    # Check if memory is available
+    if not hasattr(state, "memory_pages") or not state.memory_pages:
+        print("❌ No raw memory available from this reader/state")
+        return
+
+    # Flatten pages into raw byte list
+    raw_bytes = []
+    for page in state.memory_pages:
+        raw_bytes.extend(page)
+
+    # Split into 16-byte blocks
+    blocks = [raw_bytes[i:i+16] for i in range(0, len(raw_bytes), 16)]
+
+    # Print up to 64 blocks
+    for i, block in enumerate(blocks[:64]):
+        hex_data = " ".join(f"{b:02X}" for b in block)
+        print(f"Block {i:02}: {hex_data}")
+
+
 def print_full_state_dump(state: PortalState):
     print("\n" + "=" * 60)
     print(f"Reader: {state.reader_name}")
@@ -31,11 +54,19 @@ def print_full_state_dump(state: PortalState):
         print(f"Variant ID: {state.skylander_info.variant_id}")
         print(f"Decode Strategy: {state.skylander_info.decode_strategy}")
         print(f"Block 1: {state.skylander_info.block_hex(1)}")
+
+        # 🔥 NEW: Full block dump
+        dump_all_blocks(state)
+
         print("=" * 60)
         return
 
     if not state.ndef_records:
         print("No NDEF records found.")
+
+        # 🔥 Even if no NDEF, still try raw dump
+        dump_all_blocks(state)
+
         print("=" * 60)
         return
 
@@ -59,6 +90,10 @@ def print_full_state_dump(state: PortalState):
             pass
 
     print("\nResolved Name:", state.get_name())
+
+    # 🔥 Also dump blocks for NDEF tags
+    dump_all_blocks(state)
+
     print("=" * 60)
 
 

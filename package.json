@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "libnfc": "^0.0.1-security",
+    "skylib": "^1.0.0"
+  }
+}
