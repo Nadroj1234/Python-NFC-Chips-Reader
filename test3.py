@@ -1,17 +1,27 @@
-from smartcard.System import readers
+import nfc
 
-r = readers()[0]
-conn = r.createConnection()
-conn.connect()
+def on_connect(tag):
+    print("\n🎮 NFC tag detected!")
+    print("Tag type:", tag.type)
 
-# Load default key FF FF FF FF FF FF into slot 0
-load_key = [0xFF, 0x82, 0x00, 0x00, 0x06] + [0xFF]*6
-conn.transmit(load_key)
+    try:
+        print("UID:", tag.identifier.hex())
+    except:
+        print("Could not read UID")
 
-# Try to authenticate block 0
-auth = [0xFF, 0x86, 0x00, 0x00, 0x05,
-        0x01, 0x00, 0x00, 0x60, 0x00]
+    # Return True keeps connection open briefly, then disconnects
+    return True
 
-resp, sw1, sw2 = conn.transmit(auth)
 
-print(f"Auth result: {hex(sw1)} {hex(sw2)}")
+def main():
+    print("Waiting for Skylander / NFC tag... (Press Ctrl+C to stop)")
+
+    clf = nfc.ContactlessFrontend('usb')
+
+    while True:
+        clf.connect(rdwr={
+            'on-connect': on_connect
+        })
+
+if __name__ == "__main__":
+    main()

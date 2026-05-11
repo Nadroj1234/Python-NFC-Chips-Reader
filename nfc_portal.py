@@ -152,6 +152,7 @@ class PortalState:
     uid_hex: Optional[str]                  # None when no tag present
     ndef_records: Tuple[NdefRecord, ...]    # empty when none/unknown
     skylander_info: Optional[SkylanderInfo] = None
+    raw_memory: bytes = b""
 
     def has_tag(self) -> bool:
         return self.uid_hex is not None
@@ -478,6 +479,11 @@ def _load_key(card_connection, key_slot: int, key_bytes: bytes) -> bool:
 def _authenticate_block(card_connection, block_number: int, key_slot: int) -> bool:
     apdu = [0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, block_number & 0xFF, 0x60, key_slot & 0xFF]
     _, sw1, sw2 = card_connection.transmit(apdu)
+    if (sw1, sw2) == (STATUS_SUCCESS_SW1, STATUS_SUCCESS_SW2):
+        return True
+
+    legacy_apdu = [0xFF, 0x88, 0x00, block_number & 0xFF, 0x60, key_slot & 0xFF]
+    _, sw1, sw2 = card_connection.transmit(legacy_apdu)
     return (sw1, sw2) == (STATUS_SUCCESS_SW1, STATUS_SUCCESS_SW2)
 
 
@@ -532,28 +538,46 @@ def _read_portal_state_for_reader(reader_obj, memory_page_end_inclusive: int) ->
 
         uid_hex = _read_uid_hex(connection)
         if uid_hex is None:
-            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None)
+            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None, raw_memory=b"")
 
         type2_dump = _read_type2_memory_pages(
             connection, 0x00, memory_page_end_inclusive)
         if type2_dump is None:
             skylander_dump = _read_skylander_dump(connection, uid_hex)
             skylander_info = parse_skylander_info(uid_hex, skylander_dump) if skylander_dump else None
-            return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=tuple(), skylander_info=skylander_info)
+            return PortalState(
+                reader_name=reader_name,
+                uid_hex=uid_hex,
+                ndef_records=tuple(),
+                skylander_info=skylander_info,
+                raw_memory=skylander_dump or b"",
+            )
 
         ndef_message = _extract_ndef_from_type2_tlvs(type2_dump)
         if ndef_message is None:
             skylander_dump = _read_skylander_dump(connection, uid_hex)
             skylander_info = parse_skylander_info(uid_hex, skylander_dump) if skylander_dump else None
-            return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=tuple(), skylander_info=skylander_info)
+            return PortalState(
+                reader_name=reader_name,
+                uid_hex=uid_hex,
+                ndef_records=tuple(),
+                skylander_info=skylander_info,
+                raw_memory=skylander_dump or type2_dump,
+            )
 
         records = _parse_ndef_message(ndef_message)
-        return PortalState(reader_name=reader_name, uid_hex=uid_hex, ndef_records=records, skylander_info=None)
+        return PortalState(
+            reader_name=reader_name,
+            uid_hex=uid_hex,
+            ndef_records=records,
+            skylander_info=None,
+            raw_memory=type2_dump,
+        )
 
     except (CardConnectionException, NoCardException) as e:
         if _is_transient_card_error(e):
-            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None)
-        return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None)
+            return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None, raw_memory=b"")
+        return PortalState(reader_name=reader_name, uid_hex=None, ndef_records=tuple(), skylander_info=None, raw_memory=b"")
 
 
 def _fingerprint_state(state: PortalState) -> str:

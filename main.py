@@ -7,9 +7,13 @@ from nfc_portal import NfcPortalManager, PortalState
 
 LEFT_READER_MATCH = "0"
 RIGHT_READER_MATCH = "1"
+ACR122U_MATCH = "acr122u"
 
 
 def classify_portal_side(reader_name: str) -> Optional[str]:
+    lower_name = reader_name.lower()
+    if ACR122U_MATCH in lower_name:
+        return "left"
     if LEFT_READER_MATCH in reader_name:
         return "left"
     if RIGHT_READER_MATCH in reader_name:
@@ -17,25 +21,16 @@ def classify_portal_side(reader_name: str) -> Optional[str]:
     return None
 
 
-# 🔥 NEW: Dump all raw blocks
 def dump_all_blocks(state: PortalState):
-    print("\n--- RAW MIFARE CLASSIC DUMP (Blocks 0–63) ---")
-
-    # Check if memory is available
-    if not hasattr(state, "memory_pages") or not state.memory_pages:
-        print("❌ No raw memory available from this reader/state")
+    print("\n--- RAW MEMORY DUMP ---")
+    if not state.raw_memory:
+        print("No raw memory available from this reader/state")
         return
 
-    # Flatten pages into raw byte list
-    raw_bytes = []
-    for page in state.memory_pages:
-        raw_bytes.extend(page)
+    block_size = 16 if len(state.raw_memory) >= 16 else 4
+    blocks = [state.raw_memory[i:i + block_size] for i in range(0, len(state.raw_memory), block_size)]
 
-    # Split into 16-byte blocks
-    blocks = [raw_bytes[i:i+16] for i in range(0, len(raw_bytes), 16)]
-
-    # Print up to 64 blocks
-    for i, block in enumerate(blocks[:64]):
+    for i, block in enumerate(blocks):
         hex_data = " ".join(f"{b:02X}" for b in block)
         print(f"Block {i:02}: {hex_data}")
 
@@ -54,19 +49,13 @@ def print_full_state_dump(state: PortalState):
         print(f"Variant ID: {state.skylander_info.variant_id}")
         print(f"Decode Strategy: {state.skylander_info.decode_strategy}")
         print(f"Block 1: {state.skylander_info.block_hex(1)}")
-
-        # 🔥 NEW: Full block dump
         dump_all_blocks(state)
-
         print("=" * 60)
         return
 
     if not state.ndef_records:
         print("No NDEF records found.")
-
-        # 🔥 Even if no NDEF, still try raw dump
         dump_all_blocks(state)
-
         print("=" * 60)
         return
 
@@ -90,10 +79,7 @@ def print_full_state_dump(state: PortalState):
             pass
 
     print("\nResolved Name:", state.get_name())
-
-    # 🔥 Also dump blocks for NDEF tags
     dump_all_blocks(state)
-
     print("=" * 60)
 
 
@@ -106,7 +92,7 @@ class ToyInteractionController:
     def on_state_changed(self, old_state: PortalState, new_state: PortalState):
         side = classify_portal_side(new_state.reader_name)
         if side is None:
-            return
+            side = "left"
 
         if new_state.has_tag():
             print_full_state_dump(new_state)
@@ -159,7 +145,7 @@ def main():
     manager.start()
 
     try:
-        print("Ready. Put a Skylanders toy on the reader...\n(CTRL+C to quit)")
+        print("Ready. Put a Skylanders toy on the ACR122U-A9 reader...\n(CTRL+C to quit)")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
